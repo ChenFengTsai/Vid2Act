@@ -2,9 +2,9 @@ import torch
 from torch import nn
 from torch import distributions as torchd
 
-import models
 import networks
 import tools
+# import tensorflow as tf
 
 
 class Random(nn.Module):
@@ -30,6 +30,14 @@ class Plan2Explore(nn.Module):
   def __init__(self, config, world_model, reward=None):
     self._config = config
     self._reward = reward
+    use_distill = (
+      bool(getattr(self._config, 'use_distill', False))
+    )
+    if use_distill:
+      import models_distill as models
+    else:
+      import models_pretrain as models
+      
     self._behavior = models.ImagBehavior(config, world_model)
     self.actor = self._behavior.actor
     stoch_size = config.dyn_stoch

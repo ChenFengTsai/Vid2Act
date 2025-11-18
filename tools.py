@@ -6,8 +6,14 @@ import pickle
 import re
 import time
 import uuid
+import random
 
 import numpy as np
+
+from collections import Counter
+import csv
+import os
+from pathlib import Path
 
 import torch
 from torch import nn
@@ -153,6 +159,7 @@ def simulate(agent, envs, steps=0, episodes=0, state=None):
     length *= (1 - done)
 
   return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
+
 
 
 def save_episodes(directory, episodes):
@@ -699,3 +706,88 @@ def schedule(string, step):
       horizon = (1 - mix) * initial + mix * final
       return 1 - 1 / horizon
     raise NotImplementedError(string)
+
+def set_seed_everywhere(seed):
+  torch.manual_seed(seed)
+  if torch.cuda.is_available():
+      torch.cuda.manual_seed_all(seed)
+  np.random.seed(seed)
+  random.seed(seed)
+  
+  
+def save_incident_counts_to_csv(incident_list, step, csv_file):
+  """Save incident counts and their percentages to CSV file"""
+  total_sum = sum(incident_list)
+  
+  if total_sum == 0:
+    return
+  
+  percentages = [(count / total_sum * 100) for count in incident_list]
+  
+  # Check if file exists to write header only on first write
+  file_exists = os.path.isfile(csv_file)
+  
+  # Open file in append mode
+  with open(csv_file, 'a', newline='') as f:
+    writer = csv.writer(f)
+    
+    # Write header on first write
+    if not file_exists:
+      header = ['Step', 'Total_Sum']
+      for i in range(len(incident_list)):
+        header.append(f'Incident_Count_{i}')
+      for i in range(len(percentages)):
+        header.append(f'Percentage_{i}')
+      writer.writerow(header)
+    
+    # Write data row
+    row = [step, total_sum] + incident_list + percentages
+    writer.writerow(row)
+
+
+def _flatten_grads(grads):
+  # grads: sequence[Tensor or None]
+  parts = []
+  for g in grads:
+    if g is not None:
+      parts.append(g.reshape(-1))
+  if not parts:
+    return torch.zeros(1, device='cuda' if torch.cuda.is_available() else 'cpu')
+  return torch.cat(parts, dim=0)
+
+@torch.no_grad()
+def cosine_sim(u, v):
+  # works on 1D tensors
+  num = torch.dot(u, v)
+  den = (u.norm() * v.norm()).clamp_min(1e-12)
+  return (num / den).item()
+
+def compute_gradient_conflicts(losses_by_task, shared_params):
+  """
+  Args:
+    losses_by_task: dict[int, Tensor]  # task_id -> scalar loss tensor (requires grad)
+    shared_params : Iterable[Tensor]   # params to differentiate wrt (shared across tasks)
+
+  Returns:
+    dict[(int,int) -> float]  # pairwise cosine similarities across different tasks
+  """
+  task_ids = list(losses_by_task.keys())
+  flat = {}
+  for tid in task_ids:
+    grads = torch.autograd.grad(
+      losses_by_task[tid],
+      tuple(shared_params),
+      retain_graph=True,
+      allow_unused=True,
+      create_graph=False,
+    )
+    flat[tid] = _flatten_grads(grads).detach()
+
+  sims = {}
+  for i in range(len(task_ids)):
+    for j in range(i + 1, len(task_ids)):
+      gi, gj = flat[task_ids[i]], flat[task_ids[j]]
+      sims[(task_ids[i], task_ids[j])] = cosine_sim(gi, gj)
+  return sims
+
+

@@ -342,12 +342,12 @@ class CollectDataset:
       episode = {k: self._convert(v) for k, v in episode.items()}
       info['episode'] = episode
       if self._mode == 'eval':
-        self._mean_episode_score += (float(episode['reward'].astype(np.float64).sum())) * 0.1
-        self._mean_episode_success += (float(np.sum(episode['success']) >= 1.0)) * 0.1
+        self._mean_episode_score += (float(episode['reward'].astype(np.float64).sum())) * 0.2
+        self._mean_episode_success += (float(np.sum(episode['success']) >= 1.0)) * 0.2
         self._episode_count += 1
       for callback in self._callbacks:
         callback(episode)
-      if (self._episode_count == 10) and (self._mode == 'eval'):
+      if (self._episode_count == 5) and (self._mode == 'eval'):
         self._logger.scalar('mean_eval_return', self._mean_episode_score)
         self._logger.scalar('mean_eval_success', self._mean_episode_success)
         self._logger.write()

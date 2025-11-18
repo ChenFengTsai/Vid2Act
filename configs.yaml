@@ -3,25 +3,39 @@ defaults:
   logdir: null
   traindir: null
   evaldir: null
-  video_dir: null
+  video_dir: '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps'
   pretrain_model_dir: null
+  # offline_traindir: '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps'
+  # offline_evaldir: '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/eval_eps'
   offline_traindir: ''
   offline_evaldir: ''
+  
+  # remember to modify this everytime you change model type
+  # teacher_model_path: /home/richtsai1103/CRL/Vid2Act/logs/original_teacher/teacher_model.pt  # Required
+  # vae_model_path: /home/richtsai1103/CRL/Vid2Act/logs/original_teacher/vae_model.pt       # Optional (but recommended)
+  teacher_model_path: /home/richtsai1103/CRL/Vid2Act/logs/moe_teacher/teacher_model.pt  # Required
+  vae_model_path: /home/richtsai1103/CRL/Vid2Act/logs/moe_teacher/vae_model.pt       # Optional (but recommended)
+
   seed: 0
   steps: 1e7
   eval_every: 1e4
   log_every: 1e4
   reset_every: 0
   #gpu_growth: True
-  device: 'cuda:0'
+  device: 'cuda:1'
   precision: 16
   debug: False
   expl_gifs: False
-  camera: corner
-  num_teachers: 6
+  camera: corner2
+  num_teachers: 0
   eval_num: 10
   is_adaptive: True
   source_tasks: null
+  use_distill: True
+  # distill_weight: 0.0
+  online_mode: True
+  encoder_mode: 'moe' # original_cnn or moe
+
 
   # Environment
   task: 'dmc_walker_walk'
@@ -289,20 +303,31 @@ metaworld:
 
   task: metaworld_door_lock
 
-    # General
-  steps: 3e5
+  # General
+  steps: 1.5e5
   eval_every: 6e3
-  log_every: 6e3
-  prefill: 5000
-  dataset_size: 0
-  pretrain: 100
-  eval_num: 10
-  num_teachers: 6
-  source_tasks: ['door_close', 'faucet_open', 'handle_press', 'plate_slide', 'reach_wall', 'window_close']
+  log_every: 2e3
+  prefill: 3000
+  dataset_size: 500000
+  # pretrain: 3000
+  eval_num: 5 # original 10
+  num_teachers: 3
+
+  # source_tasks: ['door_close', 'faucet_open', 'handle_press', 'plate_slide', 'reach_wall', 'window_close']
+  source_tasks: ['door_open', 'drawer_open', 'window_open']
+  source_task_dirs: [
+    '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps_by_task/task_0',
+    '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps_by_task/task_1',
+    '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps_by_task/task_2',
+    # '/path/to/plate_slide/train_eps',
+    # '/path/to/reach_wall/train_eps',
+    # '/path/to/window_close/train_eps'
+  ]
+  pretrain_iterations: 200000
 
   # Environment
-  time_limit: 500
-  action_repeat: 1
+  time_limit: 300
+  action_repeat: 2
   train_every: 5
   train_steps: 1
 
@@ -318,6 +343,13 @@ metaworld:
   discount_layers: 3
   value_layers: 3
   actor_layers: 4
+
+  # ========== TEACHER MODEL ARCHITECTURE (FULL SIZE) ==========
+  teacher_cnn_depth: 32       # Full original size
+  teacher_dyn_hidden: 200     # Full original size
+  teacher_dyn_deter: 200      # Full original size
+  teacher_dyn_stoch: 50       # Full original size
+  n_experts: 3
 
   # Behavior
   actor_dist: 'trunc_normal'
@@ -337,6 +369,74 @@ metaworld:
   kl_free: '1.0'
   kl_scale: '1.0'
 
+metaworld_student_scale_down:
+
+  task: metaworld_door_lock
+
+  # General
+  steps: 1.5e5
+  eval_every: 6e3
+  log_every: 2e3
+  prefill: 3000
+  dataset_size: 500000
+  eval_num: 5
+  num_teachers: 3
+
+  source_tasks: ['door_open', 'drawer_open', 'window_open']
+  source_task_dirs: [
+    '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps_by_task/task_0',
+    '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps_by_task/task_1',
+    '/storage/ssd1/richtsai1103/iso_ted/log/metaworld/multi_5/mentor_open/dreamer_fixed-long_2/train_eps_by_task/task_2',
+  ]
+  pretrain_iterations: 200000
+
+  # Environment
+  time_limit: 300
+  action_repeat: 2
+  train_every: 5
+  train_steps: 1
+
+  # Model
+  grad_heads: ['image', 'reward']
+  dyn_cell: 'gru_layer_norm'
+  pred_discount: False
+  dyn_deter: 200
+  dyn_stoch: 50
+  dyn_discrete: 0
+  reward_layers: 2
+  discount_layers: 3
+  value_layers: 3
+  actor_layers: 4
+  
+  # ========== SCALE DOWN VERSION ==========
+  cnn_depth: 16              # SCALED DOWN from 32 → 16
+  dyn_hidden: 50            # SCALED DOWN from 200 → 50
+  units: 100                # SCALED DOWN from 400 → 100
+
+  # ========== TEACHER MODEL ARCHITECTURE (FULL SIZE) ==========
+  teacher_cnn_depth: 32       # Full original size
+  teacher_dyn_hidden: 200     # Full original size
+  teacher_dyn_deter: 200      # Full original size
+  teacher_dyn_stoch: 50       # Full original size
+  n_experts: 3
+
+  # Behavior
+  actor_dist: 'trunc_normal'
+  expl_amount: 0.0
+  actor_entropy: '1e-4'
+  discount: 0.99
+  imag_gradient: 'dynamics'
+  imag_gradient_mix: 1.0
+
+  # Training
+  reward_scale: 2
+  weight_decay: 0.0
+  model_lr: 3e-4
+  value_lr: 8e-5
+  actor_lr: 8e-5
+  opt_eps: 1e-5
+  kl_free: '1.0'
+  kl_scale: '1.0'
 
 debug:
 
