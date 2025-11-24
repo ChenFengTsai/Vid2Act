@@ -230,22 +230,23 @@ class WorldModelStudent(nn.Module):
           nn.Linear(distiller_latent_dim, student_feat_dim)
       )
 
-    vae_latent = getattr(config, 'vae_latent_dim', 32)
-    vae_action_dim = config.num_actions
-    self.vae = networks.VAE(
-        state_dim=teacher_feat_dim,
-        action_dim=vae_action_dim,
-        latent_dim=vae_latent,
-        max_action=action_space.high[0],
-        device=config.device,
-        config=config
-    )
-    
-    # Freeze VAE params during online training
-    for p in self.vae.parameters():
-      p.requires_grad = False
-    self.vae.eval()
-    
+    if self._config.use_vae:
+      vae_latent = getattr(config, 'vae_latent_dim', 32)
+      vae_action_dim = config.num_actions
+      self.vae = networks.VAE(
+          state_dim=teacher_feat_dim,
+          action_dim=vae_action_dim,
+          latent_dim=vae_latent,
+          max_action=action_space.high[0],
+          device=config.device,
+          config=config
+      )
+      
+      # Freeze VAE params during online training
+      for p in self.vae.parameters():
+        p.requires_grad = False
+      self.vae.eval()
+      
     self.softmax = nn.Softmax(dim=0)
     self.m = torch.tensor([0.1]).to(config.device)
 
@@ -341,7 +342,7 @@ class WorldModelStudent(nn.Module):
     print(f"Loaded {len(teacher_dict)} teacher parameters")
     
     # Load VAE weights if provided
-    if vae_state_dict is not None:
+    if vae_state_dict is not None and self._config.use_vae:
       try:
         self.vae.load_state_dict(vae_state_dict, strict=True)
         print(f"Loaded VAE checkpoint with {len(vae_state_dict)} parameters")
@@ -375,7 +376,7 @@ class WorldModelStudent(nn.Module):
 
         # ========== DISTILLATION LOSS ==========
         d_loss = torch.tensor(0.0, device=feat.device)
-        vae_loss = torch.tensor(0.0, device=feat.device)
+        # vae_loss = torch.tensor(0.0, device=feat.device)
         
         if self._config.is_adaptive:
           teacher_feat = []
@@ -447,7 +448,7 @@ class WorldModelStudent(nn.Module):
         # ========== STUDENT HEADS ==========
         losses = {'kl': kl_loss}
         if self._config.use_distill:
-          losses['distillation'] = d_loss # multiplied by self._config.distill_weight
+          losses['distillation'] = d_loss * self._config.distill_weight # multiplied by self._config.distill_weight
         # losses['vae'] = vae_loss
 
         likes = {}
@@ -638,23 +639,28 @@ class ImagBehavior(nn.Module):
       state, _, _= prev
       feat = dynamics.get_feat(state)
     
-      sampled_actions, sampled_feat = self._world_model.vae.decode(feat, weight)
-      # inp = torch.cat([feat, sampled_feat], -1)
-      inp = feat.detach()
+      if self._config.use_vae:
+        sampled_actions, sampled_feat = self._world_model.vae.decode(feat, weight)
+        inp = torch.cat([feat, sampled_feat], -1)
+      else: 
+        inp = feat.detach()
+        
       action = policy(inp).sample()
       # action = policy(inp.detach()).sample()
       succ = dynamics.img_step(state, action, sample=self._config.imag_sample)
       # return succ, feat, inp, action
       return succ, feat, action
-    # feat = 0 * dynamics.get_feat(start)
-    # sam_action, sam_feat = self._world_model.vae.decode(feat, weight)
-    # feat_action = torch.cat([feat, sam_feat], -1)
-    # action = policy(feat_action).mode()
+    
+    if self._config.use_vae:
+      feat = 0 * dynamics.get_feat(start)
+      sam_action, sam_feat = self._world_model.vae.decode(feat, weight)
+      feat_action = torch.cat([feat, sam_feat], -1)
+      action = policy(feat_action).mode()
+      succ, feats, feat_actions, actions = tools.static_scan(
+        step, [torch.arange(horizon)], (start, feat, feat_action, action))
 
     succ, feats, actions = tools.static_scan(
         step, [torch.arange(horizon)], (start, None, None))
-    # succ, feats, feat_actions, actions = tools.static_scan(
-    #     step, [torch.arange(horizon)], (start, feat, feat_action, action))
     
     # ---------- NEW: count & save incidents ----------
     

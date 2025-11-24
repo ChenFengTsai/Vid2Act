@@ -223,6 +223,12 @@ def main(config):
   agent = DreamerPretrain(config, logger, offline_datasets, acts).to(config.device)
   # agent.requires_grad_(requires_grad=False)
   
+  print("\n===== TEACHER ENCODER =====")
+  print(agent._wm.encoder)
+
+  print("\n===== TEACHER DYNAMICS =====")
+  print(agent._wm.dynamics)
+  
   # save config
   setup_utils.save_config_to_json(config, logdir)
   
@@ -295,3 +301,4 @@ if __name__ == '__main__':
   
 # python -u dreamer_pretrain.py --configs defaults metaworld --logdir ./logs/moe_teacher_new
 # python dreamer_pretrain.py --configs defaults metaworld metaworld_teacher_moe_pretrain --logdir /storage/ssd1/richtsai1103/vid2act/models/mt6/moe_multihead --device cuda:4 --seed 0
+# python dreamer_pretrain.py --configs defaults metaworld metaworld_teacher_moe_pretrain --logdir /home/u9244634/model/stratified_per_task_10/moe --device cuda:1 --seed 0

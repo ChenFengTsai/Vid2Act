@@ -210,9 +210,10 @@ class DreamerDistill(nn.Module):
     all_weight = self._wm.imp(all_weight).squeeze(-1)  # 1, 6
     all_weight = self.softmax_1(all_weight)  # 1, 6
     weight_max = torch.argmax(all_weight, dim=1)
-
-    sampled_actions, sampled_feats = self._wm.vae.decode(feat, weight_max)  ## 1 * 50
-    # feat = torch.cat([feat, sampled_feats], -1) # remove vae info
+    
+    if self._config.use_vae: 
+      sampled_actions, sampled_feats = self._wm.vae.decode(feat, weight_max)  ## 1 * 50
+      feat = torch.cat([feat, sampled_feats], -1) 
     
     if not training:
       actor = self._task_behavior.actor(feat)
@@ -482,18 +483,6 @@ def main(config):
   train_dataset = make_dataset(train_eps, config)
   eval_dataset = make_dataset(eval_eps, config)
   
-  # Load offline datasets for VAE training
-  # print('Load offline datasets for VAE.')
-  # offline_datasets = []
-  # if hasattr(config, 'source_task_dirs') and config.source_task_dirs:
-  #   for task_id, task_dir in enumerate(config.source_task_dirs):
-  #     task_dir = pathlib.Path(task_dir).expanduser()
-  #     task_eps = tools.load_episodes(task_dir, limit=config.dataset_size)
-  #     task_dataset = make_dataset(task_eps, config)
-  #     offline_datasets.append(task_dataset)
-  # else:
-  #   print("Warning: No offline datasets for VAE training")
-  #   offline_datasets = None
 
   print('Initialize agent.')
   agent = DreamerDistill(config, logger, train_dataset, acts).to(config.device)
