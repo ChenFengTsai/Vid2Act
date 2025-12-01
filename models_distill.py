@@ -15,12 +15,12 @@ class WorldModelStudent(nn.Module):
   Student world model for online training with distillation from frozen teachers.
   """
 
-  def __init__(self, step, config, action_space):
+  def __init__(self, step, config, action_space, offline_dataset=None):
     super(WorldModelStudent, self).__init__()
     self._step = step
     self._use_amp = True if config.precision==16 else False
     self._config = config
-    # self._offline_dataset = offline_dataset  # List of datasets for VAE
+    self._offline_dataset = offline_dataset  # List of datasets for VAE
     
     # ===== Load teacher config (if available) =====
     self._teacher_config = None
@@ -86,8 +86,6 @@ class WorldModelStudent(nn.Module):
     teacher_act = getattr(torch.nn, teacher_act)
     teacher_num_actions = get_teacher_param('num_actions')
     teacher_source_tasks = get_teacher_param('source_tasks')
-    # teacher_moe_temperature = get_teacher_param('moe_temperature')
-    # print('hi', type(teacher_moe_temperature))
     teacher_encoder_mode = get_teacher_param('encoder_mode')
 
     assert len(teacher_source_tasks) == config.num_teachers, \
@@ -106,15 +104,7 @@ class WorldModelStudent(nn.Module):
       
       teacher_embed_size = 2 ** (len(teacher_encoder_kernels)-1) * teacher_cnn_depth
       teacher_embed_size *= 2 * 2
-    # elif config.size[0] == 84 and config.size[1] == 84:
-    #   def conv_down(h, k, s=2, p=0, d=1):
-    #     return (h + 2*p - d*(k-1) - 1)//s + 1
-    #   H, W = int(config.size[0]), int(config.size[1])
-    #   for k in config.encoder_kernels:
-    #       H = conv_down(H, k, s=2, p=0)
-    #       W = conv_down(W, k, s=2, p=0)
-    #   channels_last = (2 ** (len(config.encoder_kernels)-1)) * config.cnn_depth
-    #   embed_size = channels_last * H * W
+
     else:
       raise NotImplemented(f"{config.size} is not applicable now")
 
@@ -376,7 +366,7 @@ class WorldModelStudent(nn.Module):
 
         # ========== DISTILLATION LOSS ==========
         d_loss = torch.tensor(0.0, device=feat.device)
-        # vae_loss = torch.tensor(0.0, device=feat.device)
+        vae_loss = torch.tensor(0.0, device=feat.device)
         
         if self._config.is_adaptive:
           teacher_feat = []
@@ -420,36 +410,33 @@ class WorldModelStudent(nn.Module):
           d_loss = d_loss_val
 
           # ========== VAE LOSS ==========
-          # if self._offline_dataset is not None:
-          #   vae_accum = 0.0
-          #   for max_weight in range(self._config.num_teachers):
-          #     source_data = next(self._offline_dataset[max_weight])
-          #     source_data = self.preprocess(source_data)
-              
-          #     with torch.no_grad():
-          #       source_embed = self.encoder_teachers(source_data, label=max_weight)
-          #       source_post, _ = self.dynamics_teachers.observe(
-          #           source_embed, source_data["action"], label=max_weight)
-          #       source_feat = self.dynamics_teachers.get_feat(source_post)
-          #       source_feat = self.distiller(source_feat).detach()
+          print(self._offline_dataset)
+          if self._offline_dataset is not None and self._config.use_vae:
+            vae_loss = 0
+            for max_weight in range (self._config.num_teachers):
+              source_data = self._offline_dataset[max_weight] # fix this 
+              source_data = self.preprocess(next(source_data))
+              source_embed = self.encoder_teachers(source_data, label=max_weight)
+              source_post, source_prior = self.dynamics_teachers.observe(source_embed, source_data["action"], label=max_weight)
+              source_feat = self.dynamics_teachers.get_feat(source_post)
+              source_feat = self.distiller(source_feat).detach()
 
-          #     batch, seq, dim = source_feat.shape
-          #     z_flat = source_feat[:, :-1, :].reshape(batch * (seq - 1), dim)
-          #     act = source_data['action'][:, 1:, :].reshape(batch * (seq - 1), -1)
-          #     label = [max_weight] * (batch * (seq - 1))
+              batch, seq, dim = source_feat.shape
+              source_feat = source_feat[:, :-1, :].reshape((batch*(seq-1), dim))
+              action = source_data['action'][:, 1:, :].reshape((batch*(seq-1), -1))
+              label = [max_weight] * (batch * (seq - 1))
+              recon, mean, std = self.vae(source_feat, action, label)
+              recon_loss = F.mse_loss(recon, action)
+              vae_kl_loss	= -0.5 * (1 + torch.log(std.pow(2)) - mean.pow(2) - std.pow(2)).mean()
+              vae_loss += recon_loss + 0.5 * vae_kl_loss
 
-          #     recon, mean, std = self.vae(z_flat, act, label)
-          #     recon_loss = torch.nn.functional.mse_loss(recon, act)
-          #     vae_kl_loss = -0.5 * (1 + torch.log(std.pow(2)) - mean.pow(2) - std.pow(2)).mean()
-          #     vae_accum += recon_loss + 0.5 * vae_kl_loss
-
-          #   vae_loss = vae_accum
 
         # ========== STUDENT HEADS ==========
         losses = {'kl': kl_loss}
         if self._config.use_distill:
           losses['distillation'] = d_loss * self._config.distill_weight # multiplied by self._config.distill_weight
-        # losses['vae'] = vae_loss
+        if self._config.use_vae:
+          losses['vae'] = vae_loss
 
         likes = {}
         for name, head in self.heads.items():
@@ -534,8 +521,9 @@ class ImagBehavior(nn.Module):
       feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
     else:
       feat_size = config.dyn_stoch + config.dyn_deter
+    if config.use_vae:
+      feat_size = feat_size+50
     self.actor = networks.ActionHead(
-        # feat_size+50,  # pytorch version
         feat_size,
         config.num_actions, config.actor_layers, config.units, config.act,
         config.actor_dist, config.actor_init_std, config.actor_min_std,
@@ -573,41 +561,29 @@ class ImagBehavior(nn.Module):
 
     with tools.RequiresGrad(self.actor):
       with torch.cuda.amp.autocast(self._use_amp):
-        # imag_feat, imag_feat_action, imag_state, imag_action = self._imagine(
-        #     start, self.actor, self._config.imag_horizon, repeats, weight)
-        imag_feat, imag_state, imag_action = self._imagine(
-            start, self.actor, self._config.imag_horizon, repeats, weight)
+        if self._config.use_vae:
+          imag_feat, imag_feat_action, imag_state, imag_action = self._imagine(
+              start, self.actor, self._config.imag_horizon, repeats, weight)
+          actor_ent = self.actor(imag_feat_action).entropy()
+        else:
+          imag_feat, imag_state, imag_action = self._imagine(
+              start, self.actor, self._config.imag_horizon, repeats, weight)
+          imag_feat_action = None
+          actor_ent = self.actor(imag_feat).entropy()
         reward = objective(imag_feat, imag_state, imag_action)
-        # actor_ent = self.actor(imag_feat_action).entropy()
-        actor_ent = self.actor(imag_feat).entropy()
-        state_ent = self._world_model.dynamics.get_dist(
-            imag_state).entropy()
+        # # actor_ent = self.actor(imag_feat_action).entropy()
+        # actor_ent = self.actor(imag_feat).entropy()
+        state_ent = self._world_model.dynamics.get_dist(imag_state).entropy()
         target, weights = self._compute_target(
-            imag_feat, imag_state, imag_action, reward, actor_ent, state_ent,
-            self._config.slow_actor_target)
-        imag_feat_action = None
+            imag_feat, imag_state, imag_action, reward, actor_ent, state_ent, self._config.slow_actor_target)
+        
         actor_loss, mets = self._compute_actor_loss(
-            imag_feat, imag_feat_action, imag_state, imag_action, target, actor_ent, state_ent,
-            weights)
-        
-        # NEW: Add minimum entropy constraint
-        # policy = self.actor(imag_feat[:-1].detach())
-        # min_entropy = 0.05  # Minimum entropy target
-        # entropy = policy.entropy()
-        # entropy_bonus = self._config.actor_entropy() * entropy
-        
-        # # Penalize if entropy drops below threshold
-        # entropy_penalty = torch.clamp(min_entropy - entropy.mean(), min=0.0)
-        # actor_loss = actor_loss + 0.1 * entropy_penalty
-        
-        # metrics['entropy'] = entropy.mean().item()
-        # metrics['entropy_penalty'] = entropy_penalty.item()
+            imag_feat, imag_feat_action, imag_state, imag_action, target, actor_ent, state_ent, weights)
         
         metrics.update(mets)
         if self._config.slow_value_target != self._config.slow_actor_target:
           target, weights = self._compute_target(
-            imag_feat, imag_state, imag_action, reward, actor_ent, state_ent,
-            self._config.slow_value_target)
+            imag_feat, imag_state, imag_action, reward, actor_ent, state_ent, self._config.slow_value_target)
         value_input = imag_feat
 
     with tools.RequiresGrad(self.value):
@@ -635,21 +611,34 @@ class ImagBehavior(nn.Module):
     flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
     start = {k: flatten(v) for k, v in start.items()}
     def step(prev, _):
-      # state, _, _, _ = prev
-      state, _, _= prev
-      feat = dynamics.get_feat(state)
-    
       if self._config.use_vae:
+        state, _, _, _ = prev
+        feat = dynamics.get_feat(state)
         sampled_actions, sampled_feat = self._world_model.vae.decode(feat, weight)
         inp = torch.cat([feat, sampled_feat], -1)
-      else: 
-        inp = feat.detach()
-        
-      action = policy(inp).sample()
-      # action = policy(inp.detach()).sample()
-      succ = dynamics.img_step(state, action, sample=self._config.imag_sample)
-      # return succ, feat, inp, action
-      return succ, feat, action
+        action = policy(inp.detach()).sample()
+        succ = dynamics.img_step(state, action, sample=self._config.imag_sample)
+        return succ, feat, inp, action
+      else:
+        state, _, _= prev
+        feat = dynamics.get_feat(state)
+        inp = feat.detach() 
+        action = policy(inp).sample()
+        succ = dynamics.img_step(state, action, sample=self._config.imag_sample)
+        return succ, feat, action
+    
+      # if self._config.use_vae:
+      #   sampled_actions, sampled_feat = self._world_model.vae.decode(feat, weight)
+      #   inp = torch.cat([feat, sampled_feat], -1)
+      #   action = policy(inp.detach()).sample()
+      # else: 
+      #   inp = feat.detach() 
+      #   action = policy(inp).sample()
+  
+      # succ = dynamics.img_step(state, action, sample=self._config.imag_sample)
+      # if self._config.use_vae:
+      #   return succ, feat, inp, action
+      # return succ, feat, action
     
     if self._config.use_vae:
       feat = 0 * dynamics.get_feat(start)
@@ -658,9 +647,9 @@ class ImagBehavior(nn.Module):
       action = policy(feat_action).mode()
       succ, feats, feat_actions, actions = tools.static_scan(
         step, [torch.arange(horizon)], (start, feat, feat_action, action))
-
-    succ, feats, actions = tools.static_scan(
-        step, [torch.arange(horizon)], (start, None, None))
+    else:
+      succ, feats, actions = tools.static_scan(
+          step, [torch.arange(horizon)], (start, None, None))
     
     # ---------- NEW: count & save incidents ----------
     
@@ -684,8 +673,10 @@ class ImagBehavior(nn.Module):
     if repeats:
       raise NotImplemented("repeats is not implemented in this version")
     
-    return feats, states, actions
-    # return feats, feat_actions, states, actions
+    if self._config.use_vae:
+      return feats, states, actions
+    else:
+      return feats, feat_actions, states, actions
 
   def _compute_target(
       self, imag_feat, imag_state, imag_action, reward, actor_ent, state_ent,
@@ -714,8 +705,10 @@ class ImagBehavior(nn.Module):
       self, imag_feat, imag_feat_action, imag_state, imag_action, target, actor_ent, state_ent,
       weights):
     metrics = {}
-    # inp = imag_feat_action.detach() if self._stop_grad_actor else imag_feat_action
-    inp = imag_feat.detach()
+    if self._config.use_vae:
+      inp = imag_feat_action.detach() if self._stop_grad_actor else imag_feat_action
+    else:
+      inp = imag_feat.detach()
     policy = self.actor(inp)
     actor_ent = policy.entropy()
     target = torch.stack(target, dim=1)

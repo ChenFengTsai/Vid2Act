@@ -1271,19 +1271,19 @@ class VAE(nn.Module):
     # If state is [B, T, D_s] and action is [B, T, A], we need label_use to be [B, T, num_teachers]
     
     if len(state.shape) == 3:
-        # Temporal dimension exists: [B, T, D]
-        batch_size, time_steps, _ = state.shape
-        # Reshape label_use from [num_teachers] to [1, 1, num_teachers]
-        # then broadcast to [B, T, num_teachers]
-        label_use = label_use.unsqueeze(0).unsqueeze(0)
-        label_use = label_use.expand(batch_size, time_steps, -1)
+      # Temporal dimension exists: [B, T, D]
+      batch_size, time_steps, _ = state.shape
+      # Reshape label_use from [num_teachers] to [1, 1, num_teachers]
+      # then broadcast to [B, T, num_teachers]
+      label_use = label_use.unsqueeze(0).unsqueeze(0)
+      label_use = label_use.expand(batch_size, time_steps, -1)
     elif len(state.shape) == 2:
-        # No temporal dimension: [B, D]
-        batch_size, _ = state.shape
-        # Reshape label_use from [num_teachers] to [1, num_teachers]
-        # then broadcast to [B, num_teachers]
-        label_use = label_use.unsqueeze(0)
-        label_use = label_use.expand(batch_size, -1)
+      # No temporal dimension: [B, D]
+      batch_size, _ = state.shape
+      # Reshape label_use from [num_teachers] to [1, num_teachers]
+      # then broadcast to [B, num_teachers]
+      label_use = label_use.unsqueeze(0)
+      label_use = label_use.expand(batch_size, -1)
     
     # Now all tensors have matching dimensions
     z = F.relu(self.e1(torch.cat([state, action, label_use], -1)))
@@ -1388,106 +1388,3 @@ class VAE(nn.Module):
     return self.max_action * torch.tanh(self.d3(a)), a
 
   
-# class MoEBlock(nn.Module):
-#   """
-#   Mixture-of-Experts feature block placed **after RSSM**.
-#   - Supports task-weight gating (pass `gate_weight` of shape [..., n_experts])
-#     or learned gating from the input when `gate_weight` is None.
-#   - Returns (y, losses) where losses contains:
-#       - 'orth_loss': expert output orthogonality penalty (Gram off-diagonal).
-#       - 'load_balance_loss': entropy regularizer for gating distribution.
-#   """
-#   def __init__(self, inp_dim, out_dim=None, n_experts=4, units=256, layers=1, act=nn.ELU, gate_learned=True, orth_lambda=0.0, lb_lambda=0.0):
-#     super(MoEBlock, self).__init__()
-#     self.inp_dim = inp_dim
-#     self.out_dim = out_dim or inp_dim
-#     self.n_experts = n_experts
-#     self.units = units
-#     self.layers = layers
-#     self.act = act
-#     self.orth_lambda = orth_lambda
-#     self.lb_lambda = lb_lambda
-#     # Experts
-#     self.experts = nn.ModuleList()
-#     for _ in range(n_experts):
-#       layers_list = []
-#       d = inp_dim
-#       for _ in range(layers):
-#         layers_list += [nn.Linear(d, units), act()]
-#         d = units
-#       layers_list += [nn.Linear(d, self.out_dim)]
-#       self.experts.append(nn.Sequential(*layers_list))
-#     # Gating network (only used if gate_weight not provided)
-#     self.gate_learned = gate_learned
-#     if gate_learned:
-#       self.gate_net = nn.Sequential(
-#           nn.Linear(inp_dim, max(64, self.n_experts)),
-#           act(),
-#           nn.Linear(max(64, self.n_experts), self.n_experts)
-#       )
-#     # Orthogonal init for stability
-#     for m in self.modules():
-#       if isinstance(m, nn.Linear):
-#         nn.init.orthogonal_(m.weight)
-#         if m.bias is not None:
-#           nn.init.zeros_(m.bias)
-
-#   def _shape_flat(self, x):
-#     # Accept [B,D] or [T,B,D] or [*,D]
-#     orig = x.shape
-#     x = x.reshape(-1, x.shape[-1])
-#     return x, orig
-
-#   def forward(self, x, gate_weight=None):
-#     # x: [..., D]
-#     x_flat, orig = self._shape_flat(x)
-#     # Expert outputs: list of [N, out_dim] -> tensor [E, N, out_dim]
-#     outs = []
-#     for e in self.experts:
-#       outs.append(e(x_flat))
-#     E = torch.stack(outs, dim=0)  # [E, N, O]
-
-#     # Gating probs
-#     if gate_weight is not None:
-#       gw = gate_weight
-#       # Support [B,E] or [T,B,E] -> [N,E]
-#       if gw.dim() == 2 and len(orig) == 3:  # [B,E] and x is [T,B,D]
-#         T = orig[0]
-#         gw = gw.unsqueeze(0).expand(T, *gw.shape)
-#       gw_flat = gw.reshape(-1, gw.shape[-1])
-#       logits = gw_flat
-#     else:
-#       if not self.gate_learned:
-#         raise ValueError("gate_weight is None and gate_learned=False")
-#       logits = self.gate_net(x_flat)  # [N,E]
-#     probs = torch.softmax(logits, dim=-1)  # [N,E]
-
-#     # Combine: y_n = sum_e p_{n,e} * y_{e,n}
-#     # E: [E,N,O], probs: [N,E]
-#     y = torch.einsum('eno,ne->no', E, probs)
-
-#     # Losses
-#     losses = {}
-#     if self.orth_lambda > 0:
-#       # compute Gram across experts for each sample: G_n = Y_n^T Y_n with Y_n in R^{E x O}
-#       # Normalize each expert output vector to unit norm for cosine sim.
-#       Yn = F.normalize(E.permute(1,0,2), dim=-1)  # [N,E,O]
-#       G = torch.matmul(Yn, Yn.transpose(1,2))     # [N,E,E]
-#       off_diag = G - torch.diag_embed(torch.diagonal(G, dim1=1, dim2=2))
-#       orth_loss = (off_diag**2).mean()
-#       losses['orth_loss'] = self.orth_lambda * orth_loss
-#     else:
-#       losses['orth_loss'] = x_flat.new_tensor(0.0)
-
-#     if self.lb_lambda > 0:
-#       # Encourage high-entropy, balanced gating (maximally mixed)
-#       ent = -(probs * (probs.clamp_min(1e-8).log())).sum(-1).mean()
-#       # Max entropy is log(E). Penalize negative gap.
-#       max_ent = math.log(self.n_experts)
-#       lb = (max_ent - ent).clamp_min(0.0)
-#       losses['load_balance_loss'] = self.lb_lambda * lb
-#     else:
-#       losses['load_balance_loss'] = x_flat.new_tensor(0.0)
-
-#     y = y.reshape(*orig[:-1], self.out_dim)
-#     return y, losses

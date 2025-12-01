@@ -180,26 +180,6 @@ def save_episodes(directory, episodes):
   return filenames
 
 
-# def from_generator(generator, batch_size):
-#   while True:
-#     batch = []
-#     for _ in range(batch_size):
-#       batch.append(next(generator))
-#     data = {}
-#     for key in ['image', 'reward', 'action', 'logprob', 'discount']:  # batch[0].keys()
-#       data[key] = []
-#       for i in range(batch_size):
-#         if key == 'action':
-#           if batch[i][key].shape[1] == 4:
-#             # b = np.zeros((50, 2))
-#             # c = np.pad((batch[i][key], b), dim=1)
-#             c = np.pad(batch[i][key], ((0, 0), (0, 2)), 'constant', constant_values=0)
-#             batch[i][key] = c
-#         data[key].append(batch[i][key])
-#       data[key] = np.stack(data[key], 0)
-#     yield data
-
-
 def from_generator(generator, batch_size):
   while True:
     batch = []
@@ -220,7 +200,6 @@ def sample_episodes(episodes, length=None, balance=False, seed=0):
     episode = random.choice(list(episodes.values()))
     if length:
       total = len(next(iter(episode.values())))
-      # print(total)
       available = total - length
       if available < 1:
         print(f'Skipped short episode of length {available}.')
@@ -230,7 +209,6 @@ def sample_episodes(episodes, length=None, balance=False, seed=0):
       else:
         index = int(random.randint(0, available + 1))
       episode = {k: v[index: index + length] for k, v in episode.items()}
-    # print(episode.keys())
     yield episode
 
 

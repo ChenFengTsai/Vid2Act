@@ -13,9 +13,10 @@ defaults:
   # remember to modify this everytime you change model type when doing distillation
   # teacher_model_path: /home/richtsai1103/CRL/Vid2Act/logs/original_teacher/teacher_model.pt  # Required
   # vae_model_path: /home/richtsai1103/CRL/Vid2Act/logs/original_teacher/vae_model.pt       # Optional (but recommended)
-  teacher_model_path: /home/richtsai1103/CRL/Vid2Act/logs/moe_teacher/teacher_model.pt  # Required
-  vae_model_path: /home/richtsai1103/CRL/Vid2Act/logs/moe_teacher/vae_model.pt       # Optional (but recommended)
-  teacher_encoder_mode: 'original_cnn'
+  # teacher_encoder_mode: 'moe'
+  teacher_model_path: /storage/ssd1/richtsai1103/vid2act/models/mt6_10_top50/moe/teacher_model.pt  # Required
+  vae_model_path: /storage/ssd1/richtsai1103/vid2act/models/mt6_10_top50/moe/vae_model.pt      # Optional (but recommended)
+  teacher_encoder_mode: 'moe' # original_cnn
 
   seed: 0
   steps: 1e7
@@ -34,7 +35,7 @@ defaults:
   source_tasks: null
   use_distill: True
   use_vae: False
-  distill_weight: 1.0
+  distill_weight: 5.0
   online_mode: True
   moe_temperature: '1.0'
 
@@ -309,7 +310,7 @@ metaworld:
   steps: 1.5e5
   eval_every: 6e3
   log_every: 2e3
-  prefill: 3000
+  prefill: 500
   dataset_size: 500000
   # pretrain: 3000
   eval_num: 5 # original 10
@@ -318,12 +319,12 @@ metaworld:
   # target_tasks: ['door_close', 'faucet_open', 'handle_press', 'plate_slide', 'reach_wall', 'window_close']
   source_tasks: ['button_press_topdown', 'door_open', 'drawer_close', 'peg_insert_side', 'pick_place', 'push']
   source_task_dirs: [
-    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/top50/dreamer_button-press-topdown',
-    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/top50/dreamer_door-open',
-    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/top50/dreamer_drawer-close',
-    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/top50/dreamer_peg-insert-side',
-    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/top50/dreamer_pick-place',
-    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/top50/dreamer_push'
+    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/stratified_per_task_10/button-press-topdown',
+    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/stratified_per_task_10/door-open',
+    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/stratified_per_task_10/drawer-close',
+    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/stratified_per_task_10/peg-insert-side',
+    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/stratified_per_task_10/pick-place',
+    '/storage/ssd1/richtsai1103/vid2act/pretrain/metaworld/pretrain_data/stratified_per_task_10/push'
   ]
   
   # source_tasks: [

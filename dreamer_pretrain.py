@@ -112,7 +112,6 @@ class DreamerPretrain(nn.Module):
     conflicts = tools.compute_gradient_conflicts(per_task_loss_tensor, shared_params)
 
     # 3) (optional) push a few scalars into your logger buffers
-    print(per_task_numeric)
     for tid, d in per_task_numeric.items():
       self._metrics.setdefault(f't{tid}/total_loss_snapshot', []).append(d['total'])
     for (i, j), sim in conflicts.items():

@@ -5,6 +5,7 @@ import os
 import pathlib
 import sys
 import warnings
+import imageio
 
 os.environ['MUJOCO_GL'] = 'osmesa'
 
@@ -28,7 +29,7 @@ to_np = lambda x: x.detach().cpu().numpy()
 
 class DreamerDistill(nn.Module):
 
-  def __init__(self, config, logger, dataset, action_space):
+  def __init__(self, config, logger, dataset, action_space, offline_dataset=None):
     super(DreamerDistill, self).__init__()
     self._config = config
     self._logger = logger
@@ -60,13 +61,16 @@ class DreamerDistill(nn.Module):
         lambda x=config.moe_temperature: tools.schedule(x, self._step))
       
     self._dataset = dataset
-    # self._offline_datasets = offline_datasets  # For VAE training
+    if config.use_vae:
+      self._offline_datasets = offline_dataset  # For VAE training
     
     # Student world model with distillation
     if config.use_distill:
-      self._wm = models_distill.WorldModelStudent(self._step, config, action_space)
-    else:
+      self._wm = models_distill.WorldModelStudent(self._step, config, action_space, offline_dataset)
+    elif not config.use_distill:
+      assert config.use_vae == False, "VAE should not be used for original dreamer"
       self._wm = models_nodistill.WorldModelStudent(self._step, config, action_space)
+
     total = sum(p.numel() for p in self._wm.parameters())  
     trainable = sum(p.numel() for p in self._wm.parameters() if p.requires_grad)
 
@@ -147,37 +151,6 @@ class DreamerDistill(nn.Module):
       self._logger.step = self._config.action_repeat * self._step
     return policy_output, state
 
-  # def _policy(self, obs, state, training):
-  #   if state is None:
-  #     batch_size = len(obs['image'])
-  #     latent = self._wm.dynamics.initial(len(obs['image']))
-  #     action = torch.zeros((batch_size, self._config.num_actions)).to(self._config.device)
-  #   else:
-  #     latent, action = state
-  #   embed = self._wm.encoder(self._wm.preprocess(obs))
-  #   latent, _ = self._wm.dynamics.obs_step(
-  #       latent, action, embed, self._config.collect_dyn_sample)
-  #   if self._config.eval_state_mean:
-  #     latent['stoch'] = latent['mean']
-  #   feat = self._wm.dynamics.get_feat(latent)
-  #   if not training:
-  #     actor = self._task_behavior.actor(feat)
-  #     action = actor.mode()
-  #   elif self._should_expl(self._step):
-  #     actor = self._expl_behavior.actor(feat)
-  #     action = actor.sample()
-  #   else:
-  #     actor = self._task_behavior.actor(feat)
-  #     action = actor.sample()
-  #   logprob = actor.log_prob(action)
-  #   latent = {k: v.detach()  for k, v in latent.items()}
-  #   action = action.detach()
-  #   if self._config.actor_dist == 'onehot_gumble':
-  #     action = torch.one_hot(torch.argmax(action, dim=-1), self._config.num_actions)
-  #   action = self._exploration(action, training)
-  #   policy_output = {'action': action, 'logprob': logprob}
-  #   state = (latent, action)
-  #   return policy_output, state
   
   def _policy(self, obs, state, training):
     if state is None:
@@ -281,10 +254,6 @@ def make_dataset(episodes, config):
       episodes, config.batch_length, config.oversample_ends)
   dataset = tools.from_generator(generator, config.batch_size)
   return dataset
-
-import os
-import imageio
-import numpy as np
 
 class SaveFrameWrapper:
     """
@@ -394,6 +363,15 @@ def process_episode(config, logger, mode, train_eps, eval_eps, episode):
     logger.video(f'{mode}_policy', video[None])
   logger.write()
 
+def ensure_fresh_logdir(logdir: pathlib.Path):
+  """
+  Abort if logdir already exists and is non-empty, to avoid overwriting logs.
+  """
+  if logdir.exists() and any(logdir.iterdir()):
+    print(f"[FATAL] Logdir '{logdir}' already exists and is not empty. "
+          f"Refusing to overwrite.", file=sys.stderr)
+    sys.exit(1)
+
 
 def main(config):
   import setup_utils as setup_utils
@@ -402,6 +380,9 @@ def main(config):
   
   tools.set_seed_everywhere(config.seed)
   logdir = pathlib.Path(config.logdir).expanduser()
+  
+  # stop if logdir already exists and is non-empty
+  ensure_fresh_logdir(logdir)
   
   config.traindir = config.traindir or logdir / 'train_eps'
   config.evaldir = config.evaldir or logdir / 'eval_eps'
@@ -484,8 +465,27 @@ def main(config):
   eval_dataset = make_dataset(eval_eps, config)
   
 
+  offline_datasets = []
+  if hasattr(config, 'source_task_dirs') and config.source_task_dirs:
+    # Load from explicitly specified source directories
+    for task_id, task_dir in enumerate(config.source_task_dirs):
+      task_dir = pathlib.Path(task_dir).expanduser()
+      task_name = config.source_tasks[task_id]
+      print(f'Loading task {task_id}: {task_name} from {task_dir}')
+      task_eps = tools.load_episodes(task_dir, limit=config.dataset_size)
+      task_dataset = make_dataset(task_eps, config)
+      offline_datasets.append(task_dataset)
+  else:
+    raise ValueError("Please specify source_task_dirs in config")
+  
+  print(f'Loaded {len(offline_datasets)} offline task datasets.')
+  
+
   print('Initialize agent.')
-  agent = DreamerDistill(config, logger, train_dataset, acts).to(config.device)
+  if config.use_vae:
+    agent = DreamerDistill(config, logger, train_dataset, acts, offline_datasets).to(config.device)
+  else:
+    agent = DreamerDistill(config, logger, train_dataset, acts).to(config.device)
   
   # Save configuration and command info
   setup_utils.save_config_to_json(config, logdir)
@@ -543,7 +543,7 @@ if __name__ == '__main__':
     parser.add_argument(f'--{key}', type=arg_type, default=arg_type(value))
   main(parser.parse_args(remaining))
   # python dreamer_distill.py --configs defaults metaworld --logdir /storage/ssd1/richtsai1103/vid2act/log/metaworld/open3/window_close/new_moe/original --teacher_encoder_mode original_conv --device cuda:4 --teacher_model_path /storage/ssd1/richtsai1103/vid2act/models/original_teacher/teacher_model.pt --vae_model_path /storage/ssd1/richtsai1103/vid2act/models/original_teacher/vae_model.pt --task metaworld_window_close --seed 0
-  # python dreamer_distill.py --configs defaults metaworld --logdir debug --teacher_encoder_mode original_conv --device cuda:4 --teacher_model_path /home/richtsai1103/CRL/Vid2Act/logs/original_teacher/teacher_model.pt --vae_model_path /home/richtsai1103/CRL/Vid2Act/logs/original_teacher/vae_model.pt --task metaworld_drawer_close --seed 0
+  # python dreamer_distill.py --configs defaults metaworld --logdir debug --teacher_encoder_mode moe --device cuda:4 --teacher_model_path /storage/ssd1/richtsai1103/vid2act/models/mt6_10_top50/moe/teacher_model.pt --vae_model_path /storage/ssd1/richtsai1103/vid2act/models/mt6_10_top50/moe/vae_model.pt --task metaworld_drawer_close --seed 0 --use_vae True
 
   # Total: 7.74M
 # Trainable: 5.41M

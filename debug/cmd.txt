@@ -1,0 +1,1 @@
+python dreamer_distill.py --configs defaults metaworld --logdir debug --teacher_encoder_mode moe --device cuda:4 --teacher_model_path /storage/ssd1/richtsai1103/vid2act/models/mt6_10_top50/moe/teacher_model.pt --vae_model_path /storage/ssd1/richtsai1103/vid2act/models/mt6_10_top50/moe/vae_model.pt --task metaworld_drawer_close --seed 0 --use_vae True

@@ -30,15 +30,6 @@ class WorldModelTeacher(nn.Module):
     if config.size[0] == 64 and config.size[1] == 64:
       embed_size = 2 ** (len(config.encoder_kernels)-1) * teacher_cnn_depth
       embed_size *= 2 * 2
-    # elif config.size[0] == 84 and config.size[1] == 84:
-    #   def conv_down(h, k, s=2, p=0, d=1):
-    #     return (h + 2*p - d*(k-1) - 1)//s + 1
-    #   H, W = int(config.size[0]), int(config.size[1])
-    #   for k in config.encoder_kernels:
-    #       H = conv_down(H, k, s=2, p=0)
-    #       W = conv_down(W, k, s=2, p=0)
-    #   channels_last = (2 ** (len(config.encoder_kernels)-1)) * config.cnn_depth
-    # #   embed_size = channels_last * H * W
     else:
       raise NotImplemented(f"{config.size} is not applicable now")
 
